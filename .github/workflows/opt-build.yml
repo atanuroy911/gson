@@ -1,0 +1,252 @@
+# Ignore Dependabot branches because it will also open a pull request, which would cause the
+# workflow to redundantly run twice
+# Common Maven arguments
+# Custom JDK 11 configuration because some of the plugins and test dependencies don't support it anymore,
+# but it is important to still test with a JDK version without Record classes
+# Disable Enforcer check which (intentionally) prevents using JDK 11 for building
+# Exclude 'test-graal-native-image' module because JUnit 6 requires >= Java 17
+# Exclude 'proto' module because protobuf-maven-plugin requires >= Java 17
+# Disable Enforcer check which (intentionally) prevents using JDK 25 for building
+# Exclude 'test-shrinker' because ProGuard does not support JDK 25 yet, see
+# https://github.com/Guardsquare/proguard/issues/481 and https://github.com/Guardsquare/proguard/issues/473
+# TODO: Once ProGuard supports JDK 25, also remove the corresponding 'JDK25' profile in `gson/pom.xml`
+# This also runs javadoc:jar to detect any issues with the Javadoc generated during release
+# Build a subset of the Gson API, see also https://github.com/google/gson/pull/2946
+# Disable Enforcer check which (intentionally) prevents using JDK 25 for building
+# TODO: Remove this once JDK 25 is fully supported for building Gson
+# According to documentation in graalvm/setup-graalvm this is used to avoid rate-limiting issues
+# Only run tests in `test-graal-native-image` (and implicitly build and run tests in `gson`),
+# everything else is covered already by regular build job above
+# See https://maven.apache.org/guides/mini/guide-reproducible-builds.html#how-to-test-my-maven-build-reproducibility
+# Run with `-Dbuildinfo.attach=false`; otherwise `artifact:compare` fails because it creates a `.buildinfo` file which
+# erroneously references the existing `.buildinfo` file (respectively because it is overwriting it, a file with size 0)
+# See https://issues.apache.org/jira/browse/MARTIFACT-57
+
+name: Modified Build
+permissions:
+  contents: read
+env:
+  MAVEN_ARGS: --show-version --batch-mode --no-transfer-progress
+jobs:
+  build:
+    name: build (${{ matrix.java }})
+    strategy:
+      matrix:
+        java:
+        - 17
+        - 21
+        include:
+        - java: 11
+          extra-mvn-args: -Denforcer.fail=false --projects '!test-graal-native-image,!proto'
+        - java: 25
+          extra-mvn-args: -Denforcer.fail=false --projects '!test-shrinker'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Setup Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |-
+        python -m pip install --upgrade pip
+        pip install inotify
+    - name: Run inotifywait
+      run: |-
+        python3 -c "
+        import inotify.adapters
+        import inotify.constants
+        import os
+        from datetime import datetime, timezone
+        with open('/home/runner/inotifywait-log-build (${{ matrix.java }}).csv', 'w') as log_file:
+          i = inotify.adapters.InotifyTree('/home/runner/work/gson/gson', inotify.constants.IN_CREATE | inotify.constants.IN_ACCESS)
+          for event in i.event_gen(yield_nones=False):
+            (_, type_names, path, filename) = event
+            now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+            events = ','.join(type_names)
+            log_file.write(f'{now};{path};{filename};{events}\n')
+            log_file.flush()
+            os.fsync(log_file.fileno())
+        " &
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - run: touch optcd-3.txt
+    - name: Set up JDK ${{ matrix.java }}
+      uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95
+      with:
+        distribution: temurin
+        java-version: ${{ matrix.java }}
+        cache: maven
+    - run: touch optcd-4.txt
+    - name: Build with Maven
+      run: mvn verify javadoc:jar ${{ matrix.extra-mvn-args || '' }}
+    - run: touch optcd-5.txt
+    - name: Upload inotifywait logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: inotifywait-build (${{ matrix.java }})
+        path: /home/runner/inotifywait-log-build (${{ matrix.java }}).csv
+  build-gson-subset:
+    name: build-gson-subset
+    runs-on: ubuntu-latest
+    steps:
+    - name: Setup Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |-
+        python -m pip install --upgrade pip
+        pip install inotify
+    - name: Run inotifywait
+      run: |-
+        python3 -c "
+        import inotify.adapters
+        import inotify.constants
+        import os
+        from datetime import datetime, timezone
+        with open('/home/runner/inotifywait-log-build-gson-subset.csv', 'w') as log_file:
+          i = inotify.adapters.InotifyTree('/home/runner/work/gson/gson', inotify.constants.IN_CREATE | inotify.constants.IN_ACCESS)
+          for event in i.event_gen(yield_nones=False):
+            (_, type_names, path, filename) = event
+            now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+            events = ','.join(type_names)
+            log_file.write(f'{now};{path};{filename};{events}\n')
+            log_file.flush()
+            os.fsync(log_file.fileno())
+        " &
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - run: touch optcd-3.txt
+    - name: Set up JDK
+      uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95
+      with:
+        distribution: temurin
+        java-version: 21
+        cache: maven
+    - run: touch optcd-4.txt
+    - name: Build with Maven
+      run: mvn clean test --projects gson --activate-profiles gson-subset
+    - run: touch optcd-5.txt
+    - name: Upload inotifywait logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: inotifywait-build-gson-subset
+        path: /home/runner/inotifywait-log-build-gson-subset.csv
+  native-image-test:
+    name: native-image-test (${{ matrix.java }})
+    strategy:
+      matrix:
+        java:
+        - 21
+        include:
+        - java: 25
+          extra-mvn-args: -Denforcer.fail=false
+    runs-on: ubuntu-latest
+    steps:
+    - name: Setup Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |-
+        python -m pip install --upgrade pip
+        pip install inotify
+    - name: Run inotifywait
+      run: |-
+        python3 -c "
+        import inotify.adapters
+        import inotify.constants
+        import os
+        from datetime import datetime, timezone
+        with open('/home/runner/inotifywait-log-native-image-test (${{ matrix.java }}).csv', 'w') as log_file:
+          i = inotify.adapters.InotifyTree('/home/runner/work/gson/gson', inotify.constants.IN_CREATE | inotify.constants.IN_ACCESS)
+          for event in i.event_gen(yield_nones=False):
+            (_, type_names, path, filename) = event
+            now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+            events = ','.join(type_names)
+            log_file.write(f'{now};{path};{filename};{events}\n')
+            log_file.flush()
+            os.fsync(log_file.fileno())
+        " &
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - run: touch optcd-3.txt
+    - name: Set up GraalVM
+      uses: graalvm/setup-graalvm@0def53c0fd8534bc13416c9469f5be45265824fd
+      with:
+        java-version: ${{ matrix.java }}
+        distribution: graalvm
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        cache: maven
+    - run: touch optcd-4.txt
+    - name: Build and run tests
+      run: mvn test --activate-profiles native-image-test --projects test-graal-native-image
+        --also-make ${{ matrix.extra-mvn-args || '' }}
+    - run: touch optcd-5.txt
+    - name: Upload inotifywait logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: inotifywait-native-image-test (${{ matrix.java }})
+        path: /home/runner/inotifywait-log-native-image-test (${{ matrix.java }}).csv
+  verify-reproducible-build:
+    name: verify-reproducible-build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Setup Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |-
+        python -m pip install --upgrade pip
+        pip install inotify
+    - name: Run inotifywait
+      run: |-
+        python3 -c "
+        import inotify.adapters
+        import inotify.constants
+        import os
+        from datetime import datetime, timezone
+        with open('/home/runner/inotifywait-log-verify-reproducible-build.csv', 'w') as log_file:
+          i = inotify.adapters.InotifyTree('/home/runner/work/gson/gson', inotify.constants.IN_CREATE | inotify.constants.IN_ACCESS)
+          for event in i.event_gen(yield_nones=False):
+            (_, type_names, path, filename) = event
+            now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+            events = ','.join(type_names)
+            log_file.write(f'{now};{path};{filename};{events}\n')
+            log_file.flush()
+            os.fsync(log_file.fileno())
+        " &
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - run: touch optcd-3.txt
+    - name: Set up JDK
+      uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95
+      with:
+        distribution: temurin
+        java-version: 17
+        cache: maven
+    - run: touch optcd-4.txt
+    - name: Verify no plugin issues
+      run: mvn artifact:check-buildplan --projects '!metrics,!test-graal-native-image,!test-jpms,!test-shrinker'
+    - run: touch optcd-5.txt
+    - name: Verify reproducible build
+      run: |-
+        mvn clean install -Dmaven.test.skip --projects '!metrics,!test-graal-native-image,!test-jpms,!test-shrinker'
+        # Run with `-Dbuildinfo.attach=false`; otherwise `artifact:compare` fails because it creates a `.buildinfo` file which
+        # erroneously references the existing `.buildinfo` file (respectively because it is overwriting it, a file with size 0)
+        # See https://issues.apache.org/jira/browse/MARTIFACT-57
+        mvn clean verify artifact:compare -Dmaven.test.skip --projects '!metrics,!test-graal-native-image,!test-jpms,!test-shrinker' -Dbuildinfo.attach=false
+    - run: touch optcd-6.txt
+    - name: Upload inotifywait logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: inotifywait-verify-reproducible-build
+        path: /home/runner/inotifywait-log-verify-reproducible-build.csv
+'on':
+- push
+- workflow_dispatch
