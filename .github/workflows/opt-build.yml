@@ -239,12 +239,15 @@ jobs:
         run: mvn artifact:check-buildplan --projects '!metrics,!test-graal-native-image,!test-jpms,!test-shrinker'
       - run: touch optcd-5.txt
       - name: Verify reproducible build
-        run: |-
-          mvn clean install -Dmaven.test.skip --projects '!metrics,!test-graal-native-image,!test-jpms,!test-shrinker'
-          # Run with `-Dbuildinfo.attach=false`; otherwise `artifact:compare` fails because it creates a `.buildinfo` file which
-          # erroneously references the existing `.buildinfo` file (respectively because it is overwriting it, a file with size 0)
-          # See https://issues.apache.org/jira/browse/MARTIFACT-57
-          mvn clean verify artifact:compare -Dmaven.test.skip --projects '!metrics,!test-graal-native-image,!test-jpms,!test-shrinker' -Dbuildinfo.attach=false
+        run: "mvn clean install -Dmaven.test.skip --projects '!metrics,!test-graal-native-image,!test-jpms,!test-shrinker'\n
+          # Run with `-Dbuildinfo.attach=false`; otherwise `artifact:compare` fails
+          because it creates a `.buildinfo` file which\n# erroneously references the
+          existing `.buildinfo` file (respectively because it is overwriting it, a
+          file with size 0)\n# See https://issues.apache.org/jira/browse/MARTIFACT-57\n
+          mvn clean verify artifact:compare -Dmaven.test.skip --projects '!metrics,!test-graal-native-image,!test-jpms,!test-shrinker'
+          -Dbuildinfo.attach=false\n -Dmaven.compiler.useIncrementalCompilation=false
+          -Dmaven.compiler.useIncrementalCompilation=false# 0)# https://issues.apache.org/jira/browse/MARTIFACT-57mvn
+          which#"
       - run: touch optcd-6.txt
       - name: Upload inotifywait logs
         uses: actions/upload-artifact@v4
