@@ -1,0 +1,65 @@
+# For security reasons this is a separate GitHub workflow, see https://github.com/google/gson/issues/2429#issuecomment-1622522842
+# Once https://github.com/mojohaus/animal-sniffer/issues/252 or https://github.com/mojohaus/animal-sniffer/pull/253
+# are resolved, can consider adjusting pom.xml to include this as part of normal Maven build
+# Common Maven arguments
+
+name: Modified Check Android compatibility
+permissions:
+  contents: read
+env:
+  MAVEN_ARGS: --show-version --batch-mode --no-transfer-progress
+jobs:
+  check-android-compatibility:
+    runs-on:
+    - self-hosted
+    - optcd
+    steps:
+    - name: Setup Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |-
+        python -m pip install --upgrade pip
+        pip install inotify
+    - name: Run inotifywait
+      run: |-
+        python3 -c "
+        import inotify.adapters
+        import inotify.constants
+        import os
+        from datetime import datetime, timezone
+        with open('/home/runner/inotifywait-log-check-android-compatibility.csv', 'w') as log_file:
+          i = inotify.adapters.InotifyTree('/home/runner/work/gson/gson', inotify.constants.IN_CREATE | inotify.constants.IN_ACCESS)
+          for event in i.event_gen(yield_nones=False):
+            (_, type_names, path, filename) = event
+            now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+            events = ','.join(type_names)
+            log_file.write(f'{now};{path};{filename};{events}\n')
+            log_file.flush()
+            os.fsync(log_file.fileno())
+        " &
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - run: touch optcd-3.txt
+    - name: Set up JDK
+      uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95
+      with:
+        distribution: temurin
+        java-version: '17'
+        cache: maven
+    - run: touch optcd-4.txt
+    - name: Check Android compatibility
+      run: |-
+        mvn compile animal-sniffer:check@check-android-compatibility -Dmaven.test.skip --projects '!metrics,!proto,!test-graal-native-image,!test-jpms,!test-shrinker'
+    - run: touch optcd-5.txt
+    - name: Upload inotifywait logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: inotifywait-check-android-compatibility
+        path: /home/runner/inotifywait-log-check-android-compatibility.csv
+    name: check-android-compatibility
+'on':
+- push
+- workflow_dispatch
